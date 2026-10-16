@@ -1,82 +1,78 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { verifyTicketPayload } from "@/lib/qr";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { token } = body;
 
-    if (!token || typeof token !== "string") {
+    const {
+      title,
+      slug,
+      description,
+      flyerUrl,
+      location,
+      startsAt,
+      endsAt,
+      isPublished,
+      ticketType,
+    } = body;
+
+    if (
+      !title ||
+      !slug ||
+      !description ||
+      !location ||
+      !startsAt ||
+      !ticketType?.name ||
+      !ticketType?.price ||
+      !ticketType?.quantity
+    ) {
       return NextResponse.json(
-        { valid: false, reason: "Token em falta" },
+        { error: "Campos obrigatórios em falta" },
         { status: 400 }
       );
     }
 
-    const payload = await verifyTicketPayload(token);
-
-    if (!payload) {
-      return NextResponse.json({
-        valid: false,
-        reason: "QR inválido ou adulterado",
-      });
-    }
-
-    const ticket = await prisma.ticket.findUnique({
-      where: { id: payload.tid },
-      include: {
-        event: { select: { title: true, startsAt: true } },
-        ticketType: { select: { name: true } },
-        user: { select: { name: true, phone: true, email: true } },
-      },
+    // Verifica se o slug já existe
+    const existing = await prisma.event.findUnique({
+      where: { slug },
     });
 
-    if (!ticket) {
-      return NextResponse.json({
-        valid: false,
-        reason: "Ingresso não encontrado",
-      });
+    if (existing) {
+      return NextResponse.json(
+        { error: "Já existe um evento com este slug" },
+        { status: 400 }
+      );
     }
 
-    if (ticket.status === "USED") {
-      return NextResponse.json({
-        valid: false,
-        reason: "Ingresso já foi utilizado",
-        usedAt: ticket.usedAt,
-      });
-    }
-
-    if (ticket.status !== "PAID") {
-      return NextResponse.json({
-        valid: false,
-        reason: "Ingresso não está pago",
-      });
-    }
-
-    // Marca como usado
-    await prisma.ticket.update({
-      where: { id: ticket.id },
+    const event = await prisma.event.create({
       data: {
-        status: "USED",
-        usedAt: new Date(),
+        title,
+        slug,
+        description,
+        flyerUrl: flyerUrl || "https://placehold.co/600x800/1e293b/94a3b8?text=Flyer",
+        location,
+        startsAt: new Date(startsAt),
+        endsAt: endsAt ? new Date(endsAt) : null,
+        isPublished: Boolean(isPublished),
+        ticketTypes: {
+          create: {
+            name: ticketType.name,
+            price: Number(ticketType.price),
+            quantity: Number(ticketType.quantity),
+          },
+        },
+      },
+      include: {
+        ticketTypes: true,
       },
     });
 
-    return NextResponse.json({
-      valid: true,
-      ticket: {
-        code: ticket.code,
-        type: ticket.ticketType.name,
-        holder: ticket.user.name || ticket.user.phone || ticket.user.email || "—",
-        event: ticket.event.title,
-        startsAt: ticket.event.startsAt,
-      },
-    });
-  } catch (error) {
-    console.error("[VALIDATE_TICKET]", error);
+    return NextResponse.json({ success: true, event }, { status: 201 });
+  } catch (error: any) {
+    console.error("[CREATE_EVENT]", error);
     return NextResponse.json(
-      { valid: false, reason: "Erro interno do servidor" },
+      { error: error.message || "Erro interno ao criar evento" },
       { status: 500 }
     );
   }
